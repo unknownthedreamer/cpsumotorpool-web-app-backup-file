@@ -1,0 +1,1234 @@
+import 'dart:async';
+import 'dart:ui';
+
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:cpsumotorpooladmin/pages/services/auth_service.dart';
+import 'package:cpsumotorpooladmin/services/notification_service.dart';
+import 'package:cpsumotorpooladmin/services/notification_sound_service.dart';
+import 'package:cpsumotorpooladmin/services/trip_service.dart';
+import 'package:cpsumotorpooladmin/widgets/interaction_loading_overlay.dart';
+import 'package:cpsumotorpooladmin/widgets/notification_dialog.dart';
+
+// ═══════════════════════════════════════════════════════════════
+// APP SHELL - Shared layout wrapper for all pages
+// Contains: AppColors, GlassCard, AppShell, Sidebar, NavItem, PageHeader
+// ═══════════════════════════════════════════════════════════════
+
+final ValueNotifier<int> adminTripTicketCountNotifier = ValueNotifier<int>(0);
+
+class AdminNotificationsController {
+  AdminNotificationsController._();
+
+  static final AdminNotificationsController instance =
+      AdminNotificationsController._();
+
+  final ValueNotifier<int> unreadCount = ValueNotifier<int>(0);
+  final ValueNotifier<List<Map<String, dynamic>>> notifications =
+      ValueNotifier<List<Map<String, dynamic>>>(const []);
+  Future<void>? _refreshRequest;
+
+  Future<void> refresh() => _refreshRequest ??= _refresh().whenComplete(() {
+    _refreshRequest = null;
+  });
+
+  Future<void> _refresh() async {
+    try {
+      final countResult = await NotificationService.getUnreadCount();
+      final listResult = await NotificationService.getNotifications();
+
+      final count = countResult is Map
+          ? ((countResult['count'] ?? 0) as num).toInt()
+          : 0;
+      final items = listResult
+          .map<Map<String, dynamic>>(
+            (item) => {
+              'id': item['id'] ?? 0,
+              'message': item['message'] ?? 'Notification',
+              'created_at': item['created_at'] ?? '',
+              'event_key': item['event_key'],
+              'priority': item['priority'] ?? 'normal',
+            },
+          )
+          .toList();
+
+      try {
+        final accountScope = await AuthService.getNotificationAccountScope();
+        if (accountScope != null) {
+          await NotificationSoundService.instance.observeNotifications(
+            accountScope: accountScope,
+            notifications: items,
+          );
+        }
+      } catch (error) {
+        debugPrint('Admin notification sound processing failed: $error');
+      }
+
+      unreadCount.value = count;
+      notifications.value = items;
+    } catch (_) {
+      unreadCount.value = 0;
+      notifications.value = const [];
+    }
+  }
+
+  Future<void> markAsReadAndRefresh(int id) async {
+    try {
+      await NotificationService.markAsRead(id);
+    } finally {
+      await refresh();
+    }
+  }
+
+  void showNotificationsDialog(BuildContext context) {
+    final items = notifications.value;
+    showDialog(
+      context: context,
+      builder: (_) {
+        return NotificationDialog(
+          notifications: items,
+          onAcknowledge: markAsReadAndRefresh,
+        );
+      },
+    );
+  }
+}
+
+// ─── App Color Palette (aligned with login glass) ───
+class AppColors {
+  static const Color primary = Color(0xFF1F8A3D);
+  static const Color primaryDark = Color(0xFF176E30);
+  static const Color brandDeep = Color(0xFF0F3D24);
+  static const Color mint = Color(0xFFB7E4C7);
+  static const Color navy = Color(0xFF1F2933);
+  static const Color muted = Color(0xFF718078);
+  static const Color mutedDark = Color(0xFF58675F);
+  static const Color background = Color(0xFFF6F8F7);
+  static const Color border = Color(0xFFDEE7E1);
+  static const Color glassFill = Color(0xFAFFFFFF);
+  static const Color glassBorder = Color(0xFFDEE7E1);
+  static const Color iconGreen2 = Color(0xFF4ADE80);
+  static const Color iconGreen3 = Color(0xFF15803D);
+  static const Color iconGreen4 = Color(0xFF166534);
+}
+
+// ─── Typography (consistent Google Fonts Play) ───
+class AppTypography {
+  AppTypography._();
+
+  static TextStyle displayTitle({
+    Color? color,
+    double fontSize = 26,
+    FontWeight fontWeight = FontWeight.w800,
+    double? letterSpacing,
+    double? height,
+  }) => GoogleFonts.play(
+    fontSize: fontSize,
+    fontWeight: fontWeight,
+    color: color,
+    letterSpacing: letterSpacing,
+    height: height,
+  );
+
+  static TextStyle labelCaps({
+    Color? color,
+    double fontSize = 13,
+    FontWeight fontWeight = FontWeight.w600,
+    double letterSpacing = 0.7,
+  }) => GoogleFonts.play(
+    fontSize: fontSize,
+    fontWeight: fontWeight,
+    color: color,
+    letterSpacing: letterSpacing,
+  );
+
+  static TextStyle bodyStyle({
+    Color? color,
+    double fontSize = 14,
+    FontWeight fontWeight = FontWeight.w400,
+    double? height,
+    double? letterSpacing,
+  }) => GoogleFonts.play(
+    fontSize: fontSize,
+    fontWeight: fontWeight,
+    color: color,
+    height: height,
+    letterSpacing: letterSpacing,
+  );
+
+  static TextStyle buttonLabel({
+    Color? color,
+    double fontSize = 16,
+    FontWeight fontWeight = FontWeight.w700,
+    double letterSpacing = 0.3,
+  }) => GoogleFonts.play(
+    fontSize: fontSize,
+    fontWeight: fontWeight,
+    color: color,
+    letterSpacing: letterSpacing,
+  );
+
+  static TextTheme textTheme(TextTheme base) => GoogleFonts.playTextTheme(base)
+      .apply(displayColor: AppColors.navy, bodyColor: AppColors.navy)
+      .copyWith(
+        displayLarge: displayTitle(fontSize: 32),
+        displayMedium: displayTitle(fontSize: 28),
+        displaySmall: displayTitle(fontSize: 24),
+        headlineLarge: displayTitle(fontSize: 26),
+        headlineMedium: displayTitle(fontSize: 22, fontWeight: FontWeight.w700),
+        headlineSmall: displayTitle(fontSize: 20, fontWeight: FontWeight.w700),
+        titleLarge: bodyStyle(fontSize: 18, fontWeight: FontWeight.w700),
+        titleMedium: bodyStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        titleSmall: bodyStyle(fontSize: 14, fontWeight: FontWeight.w600),
+        bodyLarge: bodyStyle(fontSize: 16),
+        bodyMedium: bodyStyle(fontSize: 14),
+        bodySmall: bodyStyle(fontSize: 12, color: AppColors.mutedDark),
+        labelLarge: buttonLabel(fontSize: 14),
+        labelMedium: labelCaps(fontSize: 12, letterSpacing: 1.0),
+        labelSmall: labelCaps(
+          fontSize: 10,
+          fontWeight: FontWeight.w500,
+          letterSpacing: 1.1,
+        ),
+      );
+}
+
+// ─── Shared frosted glass surface (login-matched) ───
+class GlassCard extends StatelessWidget {
+  const GlassCard({
+    super.key,
+    required this.child,
+    this.padding,
+    this.width,
+    this.borderRadius = 16,
+    this.blurSigma = 18,
+  });
+
+  final Widget child;
+  final EdgeInsetsGeometry? padding;
+  final double? width;
+  final double borderRadius;
+  final double blurSigma;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(borderRadius),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
+        child: Container(
+          width: width,
+          padding: padding,
+          decoration: BoxDecoration(
+            color: AppColors.glassFill,
+            border: Border.all(color: AppColors.glassBorder),
+            borderRadius: BorderRadius.circular(borderRadius),
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+}
+
+class _ShellAtmosphere extends StatelessWidget {
+  const _ShellAtmosphere({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Color(0xFFF6F8F7),
+                Color(0xFFF0F5F1),
+                Color(0xFFF8FAFC),
+                Color(0xFFF4F7F5),
+              ],
+              stops: [0.0, 0.35, 0.7, 1.0],
+            ),
+          ),
+        ),
+        Positioned(
+          right: -90,
+          top: -70,
+          child: Container(
+            width: 260,
+            height: 260,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: AppColors.primary.withValues(alpha: 0.035),
+            ),
+          ),
+        ),
+        Positioned(
+          left: -110,
+          bottom: -50,
+          child: Container(
+            width: 300,
+            height: 300,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: AppColors.mint.withValues(alpha: 0.08),
+            ),
+          ),
+        ),
+        child,
+      ],
+    );
+  }
+}
+
+class DriverShellAtmosphere extends StatelessWidget {
+  const DriverShellAtmosphere({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return _ShellAtmosphere(child: child);
+  }
+}
+
+// ─── App Shell (responsive layout: sidebar + content) ───
+class AppShell extends StatelessWidget {
+  const AppShell({super.key, required this.currentRoute, required this.child});
+
+  final String currentRoute;
+  final Widget child;
+
+  static final ValueNotifier<bool?> _collapsed = ValueNotifier<bool?>(null);
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<bool?>(
+      valueListenable: _collapsed,
+      builder: (context, collapsed, _) => LayoutBuilder(
+        builder: (context, constraints) {
+          final narrow = constraints.maxWidth < 900;
+          final rail = collapsed ?? (constraints.maxWidth < 1180);
+
+          if (narrow) {
+            return InteractionLoadingOverlay.coverApp(
+              Scaffold(
+                backgroundColor: AppColors.background,
+                appBar: AppBar(
+                  backgroundColor: AppColors.glassFill,
+                  foregroundColor: AppColors.navy,
+                  elevation: 0,
+                  surfaceTintColor: Colors.transparent,
+                  title: Text(
+                    'MotorPool',
+                    style: AppTypography.displayTitle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 18,
+                    ),
+                  ),
+                ),
+                drawer: Drawer(
+                  backgroundColor: Colors.transparent,
+                  child: Builder(
+                    builder: (context) => _Sidebar(
+                      currentRoute: currentRoute,
+                      compact: false,
+                      toggleTooltip: 'Close menu',
+                      onToggle: () => Navigator.pop(context),
+                    ),
+                  ),
+                ),
+                body: _ShellAtmosphere(child: child),
+              ),
+            );
+          }
+
+          return InteractionLoadingOverlay.coverApp(
+            Scaffold(
+              backgroundColor: AppColors.background,
+              body: _ShellAtmosphere(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _Sidebar(
+                      currentRoute: currentRoute,
+                      compact: rail,
+                      onToggle: () => _collapsed.value = !rail,
+                    ),
+                    Expanded(child: child),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+// ─── Sidebar Navigation ───
+class _Sidebar extends StatefulWidget {
+  const _Sidebar({
+    required this.currentRoute,
+    this.compact = false,
+    required this.onToggle,
+    this.toggleTooltip,
+  });
+
+  final String currentRoute;
+  final bool compact;
+  final VoidCallback onToggle;
+  final String? toggleTooltip;
+
+  @override
+  State<_Sidebar> createState() => _SidebarState();
+}
+
+class _SidebarState extends State<_Sidebar> {
+  String? _name;
+  String _tripRequestCount = '0';
+  String _activeTripsCount = '0';
+  Timer? _refreshTimer;
+  bool _isPageVisible = true;
+  bool _isTripCountsRefreshing = false;
+  bool _isNotificationRefreshRunning = false;
+  late final _SidebarLifecycleObserver _lifecycleObserver;
+
+  @override
+  void initState() {
+    super.initState();
+    _lifecycleObserver = _SidebarLifecycleObserver(this);
+    WidgetsBinding.instance.addObserver(_lifecycleObserver);
+    _loadName();
+    _loadTripCounts();
+    _refreshNotificationBell(background: true);
+    _refreshTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (!mounted ||
+          !_isPageVisible ||
+          ModalRoute.of(context)?.isCurrent == false) {
+        return;
+      }
+      if (!_isTripCountsRefreshing) {
+        _loadTripCounts(background: true);
+      }
+      if (!_isNotificationRefreshRunning) {
+        _refreshNotificationBell(background: true);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(_lifecycleObserver);
+    super.dispose();
+  }
+
+  void _handleAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _isPageVisible = true;
+      if (ModalRoute.of(context)?.isCurrent == false) return;
+      if (!_isTripCountsRefreshing) {
+        _loadTripCounts(background: true);
+      }
+      if (!_isNotificationRefreshRunning) {
+        _refreshNotificationBell(background: true);
+      }
+    } else if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      _isPageVisible = false;
+    }
+  }
+
+  Future<void> _refreshNotificationBell({bool background = false}) async {
+    if (background) {
+      if (_isNotificationRefreshRunning) return;
+      _isNotificationRefreshRunning = true;
+    }
+
+    try {
+      await AdminNotificationsController.instance.refresh();
+    } catch (_) {
+      if (background) return;
+    } finally {
+      if (background) {
+        _isNotificationRefreshRunning = false;
+      }
+    }
+  }
+
+  Future<void> _loadName() async {
+    final name = await AuthService.getName();
+    if (!mounted) return;
+    setState(() => _name = name);
+  }
+
+  Future<void> _loadTripCounts({bool background = false}) async {
+    if (_isTripCountsRefreshing) return;
+    _isTripCountsRefreshing = true;
+
+    try {
+      final result = await TripService.getAllTrips();
+      final rawTrips = result is Map && result['data'] is List
+          ? result['data'] as List
+          : result is List
+          ? result
+          : const [];
+
+      final nextPendingCount = rawTrips.whereType<Map>().fold<int>(0, (
+        total,
+        trip,
+      ) {
+        final status = (trip['status'] ?? '').toString().trim().toLowerCase();
+        return total + (status == 'pending' ? 1 : 0);
+      });
+
+      final nextActiveCount = rawTrips.whereType<Map>().fold<int>(0, (
+        total,
+        trip,
+      ) {
+        final status = (trip['effective_status'] ?? trip['status'] ?? '')
+            .toString()
+            .trim()
+            .toLowerCase();
+        return total + ((status == 'scheduled' || status == 'active') ? 1 : 0);
+      });
+
+      if (!mounted) return;
+
+      if (!background ||
+          nextPendingCount.toString() != _tripRequestCount ||
+          nextActiveCount.toString() != _activeTripsCount) {
+        setState(() {
+          _tripRequestCount = nextPendingCount.toString();
+          _activeTripsCount = nextActiveCount.toString();
+        });
+      }
+    } catch (_) {
+      if (background) return;
+      if (!mounted) return;
+      if (_tripRequestCount != '0' || _activeTripsCount != '0') {
+        setState(() {
+          _tripRequestCount = '0';
+          _activeTripsCount = '0';
+        });
+      }
+    } finally {
+      _isTripCountsRefreshing = false;
+    }
+  }
+
+  void _go(BuildContext context, String route) {
+    final current = ModalRoute.of(context)?.settings.name;
+    if (Scaffold.maybeOf(context)?.isDrawerOpen ?? false) {
+      Navigator.pop(context);
+    }
+    if (current == route) return;
+    Navigator.pushReplacementNamed(context, route);
+  }
+
+  Future<void> _confirmLogout(BuildContext context) async {
+    final shouldLogout = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+          title: Text(
+            'Log out?',
+            style: AppTypography.displayTitle(
+              color: AppColors.navy,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          content: Text(
+            'Are you sure you want to log out of the admin account?',
+            style: AppTypography.bodyStyle(
+              color: AppColors.mutedDark,
+              height: 1.4,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: Text(
+                'Cancel',
+                style: AppTypography.buttonLabel(color: AppColors.mutedDark),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                elevation: 0,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              child: const Text('Log out'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (shouldLogout == true && context.mounted) {
+      await AuthService.logout();
+      if (!context.mounted) return;
+      Navigator.pushNamedAndRemoveUntil(context, '/login', (_) => false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final currentRoute = widget.currentRoute;
+    final compact = widget.compact;
+
+    // ─── Navigation Items ───
+    final items = <Widget>[
+      _NavItem(
+        icon: Icons.grid_view_rounded,
+        label: 'Dashboard',
+        compact: compact,
+        selected: currentRoute == '/',
+        onTap: () => _go(context, '/'),
+      ),
+      _NavItem(
+        icon: Icons.explore_outlined,
+        label: 'Trips',
+        badge:
+            '${(int.tryParse(_tripRequestCount) ?? 0) + (int.tryParse(_activeTripsCount) ?? 0)}',
+        compact: compact,
+        selected: currentRoute == '/active-trips',
+        onTap: () => _go(context, '/approval-letter'),
+      ),
+      _NavItem(
+        icon: Icons.map_outlined,
+        label: 'Map',
+        compact: compact,
+        selected: currentRoute == '/map',
+        onTap: () => _go(context, '/map'),
+      ),
+      _NavItem(
+        icon: Icons.local_shipping_outlined,
+        label: 'Vehicles & Drivers',
+        compact: compact,
+        selected: currentRoute == '/vehicles',
+        onTap: () => _go(context, '/vehicles'),
+      ),
+      _NavItem(
+        icon: Icons.router_outlined,
+        label: 'Device Registry',
+        compact: compact,
+        selected: currentRoute == '/devices',
+        onTap: () => _go(context, '/devices'),
+      ),
+      _NavItem(
+        icon: Icons.assignment_ind_outlined,
+        label: 'Assignments',
+        compact: compact,
+        selected: currentRoute == '/coordinator-assignments',
+        onTap: () => _go(context, '/coordinator-assignments'),
+      ),
+      _NavItem(
+        icon: Icons.history,
+        label: 'Trip History',
+        compact: compact,
+        selected: currentRoute == '/trip-history',
+        onTap: () => _go(context, '/trip-history'),
+      ),
+      _NavItem(
+        icon: Icons.sync,
+        label: 'Sync Logs',
+        compact: compact,
+        selected: currentRoute == '/sync-logs',
+        onTap: () => _go(context, '/sync-logs'),
+      ),
+      _NavItem(
+        icon: Icons.settings_outlined,
+        label: 'Settings',
+        compact: compact,
+        selected: currentRoute == '/settings',
+        onTap: () => _go(context, '/settings'),
+      ),
+    ];
+
+    return ClipRect(
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: AnimatedContainer(
+          duration: MediaQuery.disableAnimationsOf(context)
+              ? Duration.zero
+              : const Duration(milliseconds: 320),
+          curve: Curves.easeInOutCubic,
+          width: compact ? 88 : 232,
+          decoration: BoxDecoration(
+            color: AppColors.glassFill,
+            border: Border(right: BorderSide(color: AppColors.glassBorder)),
+          ),
+          child: ClipRect(
+            child: OverflowBox(
+              alignment: Alignment.topLeft,
+              minWidth: 0,
+              maxWidth: 232,
+              child: AnimatedSwitcher(
+                duration: MediaQuery.disableAnimationsOf(context)
+                    ? Duration.zero
+                    : const Duration(milliseconds: 220),
+                switchInCurve: Curves.easeOutCubic,
+                switchOutCurve: Curves.easeInCubic,
+                layoutBuilder: (currentChild, previousChildren) => Stack(
+                  alignment: Alignment.topLeft,
+                  children: [
+                    for (final previous in previousChildren)
+                      IgnorePointer(child: previous),
+                    ?currentChild,
+                  ],
+                ),
+                transitionBuilder: (child, animation) => FadeTransition(
+                  opacity: animation,
+                  child: SlideTransition(
+                    position: Tween<Offset>(
+                      begin: const Offset(-0.04, 0),
+                      end: Offset.zero,
+                    ).animate(animation),
+                    child: child,
+                  ),
+                ),
+                child: SizedBox(
+                  key: ValueKey(compact),
+                  width: compact ? 88 : 232,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+                        child: Align(
+                          alignment: compact
+                              ? Alignment.center
+                              : Alignment.centerRight,
+                          child: IconButton(
+                            tooltip:
+                                widget.toggleTooltip ??
+                                (compact
+                                    ? 'Expand sidebar'
+                                    : 'Collapse sidebar'),
+                            onPressed: widget.onToggle,
+                            icon: const Icon(
+                              Icons.menu,
+                              color: AppColors.mutedDark,
+                            ),
+                          ),
+                        ),
+                      ),
+                      // ─── Logo / Brand Header ───
+                      Padding(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: compact ? 12 : 20,
+                        ),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 40,
+                              height: 40,
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: AppColors.border),
+                              ),
+                              padding: const EdgeInsets.all(2),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: Image.asset(
+                                  'assets/images/cpsu logo.png',
+                                  fit: BoxFit.contain,
+                                ),
+                              ),
+                            ),
+                            if (!compact) ...[
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'MotorPool',
+                                      overflow: TextOverflow.ellipsis,
+                                      style: AppTypography.displayTitle(
+                                        fontSize: 18,
+                                        color: AppColors.navy,
+                                        height: 1.1,
+                                      ),
+                                    ),
+                                    SizedBox(height: 2),
+                                    Text(
+                                      'Fleet Management',
+                                      overflow: TextOverflow.ellipsis,
+                                      style: AppTypography.labelCaps(
+                                        fontSize: 11,
+                                        color: AppColors.mutedDark,
+                                        letterSpacing: 0,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      // ─── Nav Item List ───
+                      Expanded(
+                        child: ListView(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          children: items,
+                        ),
+                      ),
+                      const Divider(height: 1, color: AppColors.border),
+                      // ─── Account Footer ───
+                      Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          compact ? 12 : 20,
+                          12,
+                          compact ? 12 : 20,
+                          16,
+                        ),
+                        child: Row(
+                          children: [
+                            if (!compact)
+                              const CircleAvatar(
+                                radius: 18,
+                                backgroundColor: Color(0xFFDCFCE7),
+                                child: Icon(
+                                  Icons.person,
+                                  color: AppColors.primaryDark,
+                                  size: 20,
+                                ),
+                              ),
+                            if (!compact) ...[
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      _name ?? 'Loading...',
+                                      overflow: TextOverflow.ellipsis,
+                                      style: AppTypography.bodyStyle(
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 13,
+                                        color: AppColors.navy,
+                                      ),
+                                    ),
+                                    Text(
+                                      'Motorpool Admin',
+                                      overflow: TextOverflow.ellipsis,
+                                      style: AppTypography.labelCaps(
+                                        fontSize: 11,
+                                        color: AppColors.mutedDark,
+                                        letterSpacing: 0,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                            IconButton(
+                              tooltip: 'Log out',
+                              onPressed: () => _confirmLogout(context),
+                              icon: const Icon(
+                                Icons.logout,
+                                color: AppColors.mutedDark,
+                                size: 19,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Single Navigation Item (sidebar button) ───
+class _NavItem extends StatelessWidget {
+  const _NavItem({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.selected = false,
+    this.badge,
+    this.compact = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final bool selected;
+  final String? badge;
+  final bool compact;
+
+  static bool _showBadge(String? value) {
+    if (value == null) return false;
+    final trimmed = value.trim();
+    return trimmed.isNotEmpty && trimmed != '0';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final iconColor = selected ? AppColors.primaryDark : AppColors.mutedDark;
+    final textColor = selected ? AppColors.primaryDark : AppColors.navy;
+
+    final item = Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          padding: EdgeInsets.symmetric(
+            horizontal: compact ? 0 : 14,
+            vertical: 11,
+          ),
+          decoration: BoxDecoration(
+            color: selected
+                ? AppColors.primary.withValues(alpha: 0.12)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: selected
+                  ? AppColors.primary.withValues(alpha: 0.28)
+                  : Colors.transparent,
+            ),
+          ),
+          child: compact
+              ? Stack(
+                  clipBehavior: Clip.none,
+                  alignment: Alignment.center,
+                  children: [
+                    Icon(icon, size: 22, color: iconColor),
+                    if (_showBadge(badge))
+                      Positioned(
+                        top: -4,
+                        right: 8,
+                        child: _Badge(value: badge!, selected: selected),
+                      ),
+                  ],
+                )
+              : Row(
+                  children: [
+                    Icon(icon, size: 20, color: iconColor),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        label,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTypography.bodyStyle(
+                          fontSize: 14,
+                          fontWeight: selected
+                              ? FontWeight.w600
+                              : FontWeight.w500,
+                          color: textColor,
+                        ),
+                      ),
+                    ),
+                    if (_showBadge(badge))
+                      _Badge(value: badge!, selected: selected),
+                  ],
+                ),
+        ),
+      ),
+    );
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+      child: compact ? Tooltip(message: label, child: item) : item,
+    );
+  }
+}
+
+class _SidebarLifecycleObserver extends WidgetsBindingObserver {
+  _SidebarLifecycleObserver(this._sidebarState);
+
+  final _SidebarState _sidebarState;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _sidebarState._handleAppLifecycleState(state);
+  }
+}
+
+// ─── Badge Widget (notification count circle) ───
+class _Badge extends StatelessWidget {
+  const _Badge({required this.value, required this.selected});
+
+  final String value;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 22,
+      height: 22,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(color: Colors.red, shape: BoxShape.circle),
+      child: Text(
+        value,
+        style: AppTypography.labelCaps(
+          color: Colors.white,
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0,
+        ),
+      ),
+    );
+  }
+}
+
+class AdminNotificationBell extends StatelessWidget {
+  const AdminNotificationBell({super.key, this.count, this.onTap});
+
+  final int? count;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final bellCount =
+        count ?? AdminNotificationsController.instance.unreadCount.value;
+
+    return InkWell(
+      onTap:
+          onTap ??
+          () => AdminNotificationsController.instance.showNotificationsDialog(
+            context,
+          ),
+      borderRadius: BorderRadius.circular(999),
+      child: Container(
+        width: 42,
+        height: 42,
+        decoration: BoxDecoration(
+          color: AppColors.glassFill,
+          shape: BoxShape.circle,
+          border: Border.all(color: AppColors.glassBorder),
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.brandDeep.withValues(alpha: 0.08),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            const Center(
+              child: Icon(
+                Icons.notifications_none_rounded,
+                color: AppColors.navy,
+                size: 22,
+              ),
+            ),
+            if (bellCount > 0)
+              Positioned(
+                top: 8,
+                right: 8,
+                child: Container(
+                  constraints: const BoxConstraints(
+                    minWidth: 16,
+                    minHeight: 16,
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  decoration: const BoxDecoration(
+                    color: Colors.red,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Text(
+                    bellCount > 9 ? '9+' : bellCount.toString(),
+                    textAlign: TextAlign.center,
+                    style: AppTypography.labelCaps(
+                      color: Colors.white,
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Reusable Page Header (title + notification) ───
+class PageHeader extends StatelessWidget {
+  const PageHeader({
+    super.key,
+    required this.title,
+    this.subtitle = 'CPSU Motor Pool — Fleet Management',
+    this.notificationCount = 0,
+    this.onNotificationsTap,
+  });
+
+  final String title;
+  final String subtitle;
+  final int notificationCount;
+  final VoidCallback? onNotificationsTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final titleBlock = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: AppTypography.displayTitle(
+                fontSize: 24,
+                fontWeight: FontWeight.w800,
+                color: AppColors.navy,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              subtitle,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: AppTypography.bodyStyle(
+                fontSize: 13,
+                color: AppColors.mutedDark,
+              ),
+            ),
+          ],
+        );
+
+        final actions = Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ValueListenableBuilder<int>(
+              valueListenable:
+                  AdminNotificationsController.instance.unreadCount,
+              builder: (context, count, _) {
+                return AdminNotificationBell(
+                  count: notificationCount > 0 ? notificationCount : count,
+                  onTap:
+                      onNotificationsTap ??
+                      () => AdminNotificationsController.instance
+                          .showNotificationsDialog(context),
+                );
+              },
+            ),
+          ],
+        );
+
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: titleBlock),
+            const SizedBox(width: 12),
+            actions,
+          ],
+        );
+      },
+    );
+  }
+}
+
+class AdminPageScaffold extends StatelessWidget {
+  const AdminPageScaffold({
+    super.key,
+    required this.title,
+    required this.child,
+    this.subtitle,
+  });
+
+  final String title;
+  final String? subtitle;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final pad = constraints.maxWidth < 700 ? 12.0 : 20.0;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: EdgeInsets.fromLTRB(pad, 16, pad, 0),
+              child: PageHeader(
+                title: title,
+                subtitle: subtitle ?? 'CPSU Motor Pool — Fleet Management',
+              ),
+            ),
+            Expanded(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(pad, 12, pad, 16),
+                child: child,
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+// ─── Placeholder Page (used for pages not yet built) ───
+class PlaceholderPage extends StatelessWidget {
+  const PlaceholderPage({super.key, required this.title, required this.route});
+
+  final String title;
+  final String route;
+
+  @override
+  Widget build(BuildContext context) {
+    return AppShell(
+      currentRoute: route,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final pad = constraints.maxWidth < 700 ? 16.0 : 32.0;
+          return SingleChildScrollView(
+            padding: EdgeInsets.fromLTRB(pad, 24, pad, 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                PageHeader(title: title),
+                const SizedBox(height: 28),
+                GlassCard(
+                  padding: const EdgeInsets.all(24),
+                  borderRadius: 16,
+                  child: Text(
+                    '$title content coming soon.',
+                    style: AppTypography.bodyStyle(color: AppColors.mutedDark),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
